@@ -143,8 +143,17 @@ namespace GeneticRoulette
             try
             {
                 if (Plugin.Active.Count == 0) return;
+                // как в самой игре: у мёртвого игрока и во время катсцен статусов нет
+                PlayerCamera cam = PlayerCamera.main;
+                if (cam == null || cam.body == null || !cam.body.alive) return;
+                if (WorldGeneration.world != null && WorldGeneration.world.cutsceneActive) return;
                 if (MoodleManager.main != null && MoodleManager.main != __instance) return;
-                DiseaseMoodles.Add(__instance);
+                // К этому моменту игра уже включила режим "боковых" статусов (они видны только при наведении).
+                // Болезни должны быть видны всегда, поэтому добавляем их как основные.
+                bool prevSide = __instance.sideMoodles;
+                __instance.sideMoodles = false;
+                try { DiseaseMoodles.Add(__instance); }
+                finally { __instance.sideMoodles = prevSide; }
             }
             catch (Exception e) { Plugin.Log.LogError("Moodles failed: " + e); }
         }

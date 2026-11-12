@@ -1,0 +1,46 @@
+
+# Build outputs
+bin/
+obj/
+
+# Visual Studio / Rider
+.vs/
+.idea/
+.idea.*/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Rider
+.idea/**
+
+# .NET
+*.dll
+*.exe
+*.pdb
+*.cache
+*.log
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+
+# Generated project files
+*.csproj.user
+*.sln.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Test results
+TestResults/

@@ -63,6 +63,8 @@ namespace GeneticRoulette
         // ---------- состояние ----------
         internal static HashSet<Dz> Active = new HashSet<Dz>();
         internal static bool Has(Dz d) { return Active.Contains(d); }
+        internal static bool AsthmaAttack { get { return asthmaLeft > 0f; } }
+        internal static bool NarcWarning { get { return narcWarned && !narcTriggered; } }
 
         static bool pendingInit;
         static bool pendingLoaded;
@@ -388,7 +390,7 @@ namespace GeneticRoulette
         }
 
         // ---------- тексты ----------
-        static bool Ru()
+        internal static bool Ru()
         {
             string l = (CfgLang.Value ?? "ru").Trim().ToLowerInvariant();
             if (l == "ru") return true;

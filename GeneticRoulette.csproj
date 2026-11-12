@@ -31,6 +31,11 @@
     <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(ManagedDir)\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(ManagedDir)\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(ManagedDir)\UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UIModule"><HintPath>$(ManagedDir)\UnityEngine.UIModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UI"><HintPath>$(ManagedDir)\UnityEngine.UI.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.TextMeshPro"><HintPath>$(ManagedDir)\Unity.TextMeshPro.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.TextCoreFontEngineModule"><HintPath>$(ManagedDir)\UnityEngine.TextCoreFontEngineModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.TextCoreTextEngineModule"><HintPath>$(ManagedDir)\UnityEngine.TextCoreTextEngineModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.RenderPipelines.Core.Runtime"><HintPath>$(ManagedDir)\Unity.RenderPipelines.Core.Runtime.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.RenderPipelines.Universal.Runtime"><HintPath>$(ManagedDir)\Unity.RenderPipelines.Universal.Runtime.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>

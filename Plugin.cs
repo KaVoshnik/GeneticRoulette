@@ -45,6 +45,8 @@ namespace GeneticRoulette
         internal static ConfigEntry<KeyCode> CfgRerollKey;
         internal static ConfigEntry<string> CfgForce;
         internal static ConfigEntry<bool> CfgSkipTutorial;
+        internal static ConfigEntry<string> CfgAccent;
+        internal static ConfigEntry<float> CfgUiScale;
 
         internal static ConfigEntry<float> CfgHivInfection;
         internal static ConfigEntry<float> CfgHemoBleed;
@@ -96,9 +98,8 @@ namespace GeneticRoulette
         GameObject visionGo;
         float visionCheck;
 
-        // стили
-        GUIStyle sTitle, sBig, sText, sSmall;
-        Texture2D texBg;
+        readonly RouletteUi ui = new RouletteUi();
+        static float spinProgress;
 
         // рефлексия
         internal static MethodInfo MiBleedGet, MiBleedSet, MiClotGet, MiClotSet, MiNapAlt, MiDropItem;
@@ -161,6 +162,8 @@ namespace GeneticRoulette
             CfgListKey = Config.Bind("General", "ListKey", KeyCode.F7, "Клавиша показа списка текущих болезней");
             CfgRerollKey = Config.Bind("Debug", "RerollKey", KeyCode.F8, "Тест: принудительно бросить рулетку заново прямо сейчас");
             CfgForce = Config.Bind("Debug", "ForceDiseases", "", "Для теста: принудительный список через запятую (Hiv,Hemophilia,Asthma,Deafness,Narcolepsy,FragileBones,Deuteranopia,Achromatopsia). Пусто = случайно");
+            CfgAccent = Config.Bind("UI", "AccentColor", "#C93C3C", "Цвет рамок и акцентов интерфейса (HTML-цвет)");
+            CfgUiScale = Config.Bind("UI", "UiScale", 1.0f, "Масштаб окон мода (0.5-2.5)");
             CfgSkipTutorial = Config.Bind("Debug", "SkipInTutorial", false, "Не бросать рулетку, если в сцене есть TutorialHandler");
 
             CfgHivInfection = Config.Bind("Tuning", "HivInfectionMultiplier", 3.0f, "Множитель шанса заражения ран");
@@ -489,6 +492,7 @@ namespace GeneticRoulette
                     rollIdx = idx;
                     float local = t - idx * SlotTime;
                     locked = local >= SpinTime;
+                    spinProgress = Mathf.Clamp01(local / SpinTime);
                     if (locked)
                     {
                         reelText = RollName(rolls[idx]);
@@ -505,109 +509,56 @@ namespace GeneticRoulette
                     }
                 }
             }
+
+            UpdateUi();
         }
 
         internal void Draw()
         {
+            // Отрисовка — в uGUI (RouletteUi); здесь только запасной приём клавиш через IMGUI.
             Event e = Event.current;
             if (e != null && e.type == EventType.KeyDown)
             {
                 if (e.keyCode == CfgListKey.Value) HandleKey(CfgListKey.Value);
                 else if (e.keyCode == CfgRerollKey.Value) HandleKey(CfgRerollKey.Value);
             }
-
-            bool drawList = showList || Time.realtimeSinceStartup < listUntil;
-            bool drawToast = Time.realtimeSinceStartup < toastUntil;
-            if (!rouletteActive && !drawList && !drawToast) return;
-
-            if (e != null && e.type != EventType.Repaint) return;
-
-            InitStyles();
-            float k = Mathf.Clamp(Screen.height / 1080f, 0.7f, 2.2f);
-            sTitle.fontSize = (int)(24 * k);
-            sBig.fontSize = (int)(30 * k);
-            sText.fontSize = (int)(18 * k);
-            sSmall.fontSize = (int)(15 * k);
-
-            if (rouletteActive)
-            {
-                float w = 760 * k, h = 330 * k;
-                Rect r = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
-                GUI.DrawTexture(r, texBg);
-                GUI.Label(new Rect(r.x, r.y + 16 * k, w, 40 * k), Ru() ? "РУЛЕТКА ГЕНЕТИЧЕСКИХ БОЛЕЗНЕЙ" : "GENETIC DISEASE ROULETTE", sTitle);
-                GUI.Label(new Rect(r.x, r.y + 64 * k, w, 30 * k), (Ru() ? "Бросок " : "Roll ") + (rollIdx + 1) + " / " + rolls.Count, sText);
-
-                Color prev = sBig.normal.textColor;
-                sBig.normal.textColor = locked ? new Color(1f, 0.85f, 0.25f) : Color.white;
-                GUI.Label(new Rect(r.x + 20 * k, r.y + 120 * k, w - 40 * k, 70 * k), reelText, sBig);
-                sBig.normal.textColor = prev;
-
-                if (locked && rollIdx < rolls.Count)
-                {
-                    int v = rolls[rollIdx];
-                    string d = v < 0 ? (Ru() ? "Повезло: никаких болезней." : "Lucky: no diseases.") : DDesc((Dz)v);
-                    GUI.Label(new Rect(r.x + 20 * k, r.y + 205 * k, w - 40 * k, 70 * k), d, sText);
-                }
-            }
-
-            if (drawList)
-            {
-                float lw = 520 * k;
-                int lines = Mathf.Max(1, Active.Count);
-                float lh = (46 + lines * 24) * k;
-                Rect r = new Rect(12 * k, 12 * k, lw, lh);
-                GUI.DrawTexture(r, texBg);
-                GUI.Label(new Rect(r.x + 8 * k, r.y + 6 * k, lw - 16 * k, 28 * k), Ru() ? "Ваши болезни" : "Your conditions", sText);
-                float y = r.y + 34 * k;
-                if (Active.Count == 0)
-                {
-                    GUI.Label(new Rect(r.x + 8 * k, y, lw - 16 * k, 24 * k), Healthy(), sSmall);
-                }
-                else
-                {
-                    foreach (Dz d in Active)
-                    {
-                        GUI.Label(new Rect(r.x + 8 * k, y, lw - 16 * k, 24 * k), "• " + DName(d), sSmall);
-                        y += 24 * k;
-                    }
-                }
-            }
-
-            if (drawToast)
-            {
-                float tw = 760 * k, th = 44 * k;
-                Rect r = new Rect((Screen.width - tw) * 0.5f, Screen.height * 0.18f, tw, th);
-                GUI.DrawTexture(r, texBg);
-                GUI.Label(r, toastText, sText);
-            }
         }
 
-        void InitStyles()
+        void UpdateUi()
         {
-            if (sTitle != null) return;
-            texBg = new Texture2D(1, 1);
-            texBg.SetPixel(0, 0, new Color(0.04f, 0.04f, 0.07f, 0.9f));
-            texBg.Apply();
+            bool listOn = showList || Time.realtimeSinceStartup < listUntil;
+            bool toastOn = Time.realtimeSinceStartup < toastUntil;
 
-            sTitle = new GUIStyle(GUI.skin.label);
-            sTitle.alignment = TextAnchor.MiddleCenter;
-            sTitle.fontStyle = FontStyle.Bold;
-            sTitle.normal.textColor = new Color(0.9f, 0.4f, 0.4f);
+            string title = Ru() ? "РУЛЕТКА ГЕНЕТИЧЕСКИХ БОЛЕЗНЕЙ" : "GENETIC DISEASE ROULETTE";
+            string counter = "";
+            string desc = "";
+            string reel = reelText;
+            if (rouletteActive && rollIdx < rolls.Count)
+            {
+                counter = (Ru() ? "БРОСОК " : "ROLL ") + (rollIdx + 1) + "/" + rolls.Count;
+                if (locked)
+                {
+                    int v = rolls[rollIdx];
+                    desc = v < 0 ? (Ru() ? "Повезло: никаких болезней." : "Lucky: no diseases.") : DDesc((Dz)v);
+                }
+            }
 
-            sBig = new GUIStyle(GUI.skin.label);
-            sBig.alignment = TextAnchor.MiddleCenter;
-            sBig.fontStyle = FontStyle.Bold;
-            sBig.wordWrap = true;
-            sBig.normal.textColor = Color.white;
+            string head = Ru() ? "ВАШИ БОЛЕЗНИ" : "YOUR CONDITIONS";
+            StringBuilder body = new StringBuilder();
+            int lines = 0;
+            if (Active.Count == 0) { body.Append(Healthy()); lines = 1; }
+            else
+            {
+                foreach (Dz d in Active)
+                {
+                    if (lines > 0) body.Append('\n');
+                    body.Append("- ").Append(DName(d));
+                    lines++;
+                }
+            }
 
-            sText = new GUIStyle(GUI.skin.label);
-            sText.alignment = TextAnchor.MiddleCenter;
-            sText.wordWrap = true;
-            sText.normal.textColor = new Color(0.9f, 0.9f, 0.9f);
-
-            sSmall = new GUIStyle(GUI.skin.label);
-            sSmall.alignment = TextAnchor.MiddleLeft;
-            sSmall.normal.textColor = new Color(0.85f, 0.85f, 0.85f);
+            ui.Update(rouletteActive, title, counter, reel, locked, spinProgress, desc,
+                listOn, head, body.ToString(), lines, toastOn, toastText);
         }
 
         // =====================================================================

@@ -1,8 +1,8 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Text;
 using BepInEx;
 using BepInEx.Configuration;
@@ -14,24 +14,12 @@ using UnityEngine.Rendering.Universal;
 
 namespace GeneticRoulette
 {
-    public enum Dz
-    {
-        Hiv = 0,
-        Hemophilia = 1,
-        Asthma = 2,
-        Deafness = 3,
-        Narcolepsy = 4,
-        FragileBones = 5,
-        Deuteranopia = 6,
-        Achromatopsia = 7
-    }
-
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public class Plugin : BaseUnityPlugin
     {
         public const string PluginGuid = "geneticroulette.casualtiesunknown";
         public const string PluginName = "Genetic Disease Roulette";
-        public const string PluginVersion = "1.0.0";
+        public const string PluginVersion = "1.1.0";
 
         internal static Plugin Instance;
         internal static ManualLogSource Log;
@@ -42,12 +30,13 @@ namespace GeneticRoulette
         internal static ConfigEntry<float> CfgHealthyChance;
         internal static ConfigEntry<bool> CfgShowRoulette;
         internal static ConfigEntry<KeyCode> CfgListKey;
+        internal static ConfigEntry<KeyCode> CfgDebugKey;
         internal static ConfigEntry<KeyCode> CfgRerollKey;
         internal static ConfigEntry<string> CfgForce;
         internal static ConfigEntry<bool> CfgSkipTutorial;
         internal static ConfigEntry<string> CfgAccent;
         internal static ConfigEntry<float> CfgUiScale;
-
+        internal static ConfigEntry<bool> CfgPerks;
         internal static ConfigEntry<float> CfgHivInfection;
         internal static ConfigEntry<float> CfgHemoBleed;
         internal static ConfigEntry<float> CfgHemoClot;
@@ -63,8 +52,16 @@ namespace GeneticRoulette
         // ---------- состояние ----------
         internal static HashSet<Dz> Active = new HashSet<Dz>();
         internal static bool Has(Dz d) { return Active.Contains(d); }
-        internal static bool AsthmaAttack { get { return asthmaLeft > 0f; } }
-        internal static bool NarcWarning { get { return narcWarned && !narcTriggered; } }
+
+        /// <summary>Режим отладки. Включается Ctrl+Shift+DebugKey, при каждом запуске игры выключен.</summary>
+        internal static bool DebugMode;
+
+        /// <summary>Тело игрока; обновляется раз в кадр в Step, чтобы не искать его в каждом патче.</summary>
+        internal static Body PlayerBody;
+
+        /// <summary>Проблемы, найденные при старте (не нашлись методы/поля игры); о них один раз скажет тост.</summary>
+        internal static readonly List<string> Problems = new List<string>();
+        static bool problemsShown;
 
         static bool pendingInit;
         static bool pendingLoaded;
@@ -91,65 +88,12 @@ namespace GeneticRoulette
         static float waitLogTime;
         static bool lastLoadFlagKnown;
 
-        // эффекты
-        static float asthmaTimer, asthmaLeft;
-        static float narcTimer, narcSleepTimer;
-        static bool narcTriggered, narcWarned;
-
         // зрение
         GameObject visionGo;
         float visionCheck;
 
         readonly RouletteUi ui = new RouletteUi();
         static float spinProgress;
-
-        // рефлексия
-        internal static MethodInfo MiBleedGet, MiBleedSet, MiClotGet, MiClotSet, MiNapAlt, MiDropItem;
-
-        static readonly string[] NameRu =
-        {
-            "ВИЧ (хроническая иммунная недостаточность)",
-            "Гемофилия",
-            "Астма",
-            "Тугоухость",
-            "Нарколепсия",
-            "Хрупкие кости",
-            "Дальтонизм (красно-зелёный)",
-            "Ахроматопсия (мир без цвета)"
-        };
-        static readonly string[] NameEn =
-        {
-            "HIV (chronic immunodeficiency)",
-            "Hemophilia",
-            "Asthma",
-            "Hearing loss",
-            "Narcolepsy",
-            "Brittle bones",
-            "Red-green color blindness",
-            "Achromatopsia (no color)"
-        };
-        static readonly string[] DescRu =
-        {
-            "Раны инфицируются заметно быстрее.",
-            "Кровотечения сильнее и останавливаются хуже.",
-            "Периодические приступы удушья: падают кислород и выносливость.",
-            "Постоянная потеря слуха.",
-            "Внезапные приступы сна. Предметы из рук выпадают.",
-            "Падения и удары ранят и ломают сильнее.",
-            "Красный и зелёный сливаются.",
-            "Весь мир в оттенках серого."
-        };
-        static readonly string[] DescEn =
-        {
-            "Wounds get infected much faster.",
-            "Bleeding is heavier and stops worse.",
-            "Periodic attacks: oxygen and stamina drop.",
-            "Permanent hearing loss.",
-            "Sudden sleep attacks. You drop what you hold.",
-            "Falls and impacts injure and break more.",
-            "Red and green blur together.",
-            "The whole world is grayscale."
-        };
 
         // =====================================================================
         void Awake()
@@ -162,12 +106,13 @@ namespace GeneticRoulette
             CfgHealthyChance = Config.Bind("General", "HealthyChance", 0.10f, "Шанс, что в одном броске выпадет 'Здоров' (0-1)");
             CfgShowRoulette = Config.Bind("General", "ShowRoulette", true, "Показывать анимацию рулетки в начале забега");
             CfgListKey = Config.Bind("General", "ListKey", KeyCode.F7, "Клавиша показа списка текущих болезней");
-            CfgRerollKey = Config.Bind("Debug", "RerollKey", KeyCode.F8, "Тест: принудительно бросить рулетку заново прямо сейчас");
+            CfgDebugKey = Config.Bind("Debug", "DebugToggleKey", KeyCode.F9, "Ctrl+Shift+эта клавиша включает/выключает режим отладки (в углу экрана появится надпись DEBUG MOD)");
+            CfgRerollKey = Config.Bind("Debug", "RerollKey", KeyCode.F8, "Тест: принудительно бросить рулетку заново. Работает только при включённом режиме отладки");
             CfgForce = Config.Bind("Debug", "ForceDiseases", "", "Для теста: принудительный список через запятую (Hiv,Hemophilia,Asthma,Deafness,Narcolepsy,FragileBones,Deuteranopia,Achromatopsia). Пусто = случайно");
             CfgAccent = Config.Bind("UI", "AccentColor", "#C93C3C", "Цвет рамок и акцентов интерфейса (HTML-цвет)");
             CfgUiScale = Config.Bind("UI", "UiScale", 1.0f, "Масштаб окон мода (0.5-2.5)");
             CfgSkipTutorial = Config.Bind("Debug", "SkipInTutorial", false, "Не бросать рулетку, если в сцене есть TutorialHandler");
-
+            CfgPerks = Config.Bind("General", "EnablePerks", true, "Небольшие плюсы у некоторых болезней (баланс). false = только штрафы, чистый хардкор");
             CfgHivInfection = Config.Bind("Tuning", "HivInfectionMultiplier", 3.0f, "Множитель шанса заражения ран");
             CfgHemoBleed = Config.Bind("Tuning", "HemophiliaBleedMultiplier", 1.8f, "Множитель скорости кровотечения");
             CfgHemoClot = Config.Bind("Tuning", "HemophiliaClotMultiplier", 0.4f, "Множитель скорости свёртывания (меньше = хуже)");
@@ -180,12 +125,7 @@ namespace GeneticRoulette
             CfgNarcSleep = Config.Bind("Tuning", "NarcolepsySleepSeconds", 20f, "Через сколько секунд будить после приступа (0 = как решит игра)");
             CfgBones = Config.Bind("Tuning", "BrittleBonesImpactMultiplier", 1.45f, "Множитель силы ударов по конечностям");
 
-            MiBleedGet = AccessTools.PropertyGetter(typeof(Body), "bleedingSpeedMultiplier");
-            MiBleedSet = AccessTools.PropertySetter(typeof(Body), "bleedingSpeedMultiplier");
-            MiClotGet = AccessTools.PropertyGetter(typeof(Body), "bleedClottingSpeed");
-            MiClotSet = AccessTools.PropertySetter(typeof(Body), "bleedClottingSpeed");
-            MiNapAlt = AccessTools.Method(typeof(Body), "AltNapCoroutine");
-            MiDropItem = AccessTools.Method(typeof(Body), "DropItem", new Type[] { typeof(int) });
+            Diseases.Init();
 
             try
             {
@@ -195,7 +135,7 @@ namespace GeneticRoulette
                 go.AddComponent<Runner>();
                 Log.LogInfo("Runner created");
             }
-            catch (Exception e) { Log.LogError("Runner creation failed: " + e); }
+            catch (Exception e) { Log.LogError("Runner creation failed: " + e); Problem("Не удалось создать Runner: мод не будет работать"); }
 
             var harmony = new Harmony(PluginGuid);
             int ok = 0, fail = 0;
@@ -203,9 +143,21 @@ namespace GeneticRoulette
             {
                 if (t.GetCustomAttributes(typeof(HarmonyPatch), true).Length == 0) continue;
                 try { harmony.CreateClassProcessor(t).Patch(); ok++; }
-                catch (Exception e) { fail++; Log.LogError("Patch " + t.Name + " failed: " + e); }
+                catch (Exception e)
+                {
+                    fail++;
+                    Log.LogError("Patch " + t.Name + " failed: " + e);
+                    Problem("Патч " + t.Name + " не применился");
+                }
             }
             Log.LogInfo(PluginName + " " + PluginVersion + ": patches ok=" + ok + " failed=" + fail);
+        }
+
+        /// <summary>Запоминает проблему совместимости с версией игры (пишет в лог и покажет тост в игре).</summary>
+        internal static void Problem(string text)
+        {
+            Problems.Add(text);
+            if (Log != null) Log.LogError("COMPAT: " + text);
         }
 
         // вызывается из патча WorldGeneration.Start -> SaveSystem.TryLoadGame
@@ -224,8 +176,13 @@ namespace GeneticRoulette
 
         internal static bool IsPlayer(Body b)
         {
+            return ReferenceEquals(b, PlayerBody) && (object)PlayerBody != null;
+        }
+
+        static void RefreshPlayer()
+        {
             PlayerCamera cam = PlayerCamera.main;
-            return cam != null && b != null && cam.body == b;
+            PlayerBody = cam != null ? cam.body : null;
         }
 
         // =====================================================================
@@ -250,6 +207,13 @@ namespace GeneticRoulette
             pendingInit = false;
             lastWorld = w;
             Log.LogInfo("World ready, initializing (loaded=" + pendingLoaded + ")");
+
+            if (Problems.Count > 0 && !problemsShown)
+            {
+                problemsShown = true;
+                Toast((Ru() ? "Genetic Roulette: часть эффектов не работает (" : "Genetic Roulette: some effects are off (") + Problems.Count
+                    + (Ru() ? "), см. лог BepInEx" : "), see BepInEx log"), 9f);
+            }
 
             if (CfgSkipTutorial.Value)
             {
@@ -306,12 +270,21 @@ namespace GeneticRoulette
 
         static void ResetEffectState()
         {
-            asthmaLeft = 0f;
-            asthmaTimer = UnityEngine.Random.Range(CfgAsthmaMin.Value, CfgAsthmaMax.Value) * 0.5f;
-            narcTimer = UnityEngine.Random.Range(CfgNarcMin.Value, CfgNarcMax.Value) * 0.5f;
-            narcSleepTimer = 0f;
-            narcTriggered = false;
-            narcWarned = false;
+            Diseases.ResetAll();
+        }
+
+        static DiseaseDef PickWeighted(List<DiseaseDef> pool)
+        {
+            float total = 0f;
+            foreach (DiseaseDef d in pool) total += Mathf.Max(0f, d.Weight);
+            if (total <= 0f) return pool[UnityEngine.Random.Range(0, pool.Count)];
+            float r = UnityEngine.Random.value * total;
+            foreach (DiseaseDef d in pool)
+            {
+                r -= Mathf.Max(0f, d.Weight);
+                if (r <= 0f) return d;
+            }
+            return pool[pool.Count - 1];
         }
 
         static List<int> DoRoll()
@@ -326,16 +299,14 @@ namespace GeneticRoulette
                     try
                     {
                         Dz d = (Dz)Enum.Parse(typeof(Dz), part.Trim(), true);
-                        if (!result.Contains((int)d)) result.Add((int)d);
+                        if (Diseases.Get(d) != null && !result.Contains((int)d)) result.Add((int)d);
                     }
                     catch (Exception) { Log.LogWarning("ForceDiseases: unknown name '" + part + "'"); }
                 }
                 if (result.Count > 0) return result;
             }
 
-            List<int> pool = new List<int>();
-            foreach (Dz d in Enum.GetValues(typeof(Dz))) pool.Add((int)d);
-
+            List<DiseaseDef> pool = new List<DiseaseDef>(Diseases.All);
             int n = Mathf.Clamp(CfgRollCount.Value, 1, 3);
             for (int i = 0; i < n; i++)
             {
@@ -344,12 +315,12 @@ namespace GeneticRoulette
                     result.Add(-1);
                     continue;
                 }
-                int pick = pool[UnityEngine.Random.Range(0, pool.Count)];
-                result.Add(pick);
+                DiseaseDef pick = PickWeighted(pool);
+                result.Add((int)pick.Id);
                 pool.Remove(pick);
-                // два вида нарушения цветового зрения не сочетаем
-                if (pick == (int)Dz.Achromatopsia) pool.Remove((int)Dz.Deuteranopia);
-                if (pick == (int)Dz.Deuteranopia) pool.Remove((int)Dz.Achromatopsia);
+                // выкидываем несовместимые (в обе стороны)
+                Dz picked = pick.Id;
+                pool.RemoveAll(p => Array.IndexOf(pick.Incompatible, p.Id) >= 0 || Array.IndexOf(p.Incompatible, picked) >= 0);
             }
             return result;
         }
@@ -382,7 +353,12 @@ namespace GeneticRoulette
                 if (txt == "none" || txt.Length == 0) return set;
                 foreach (string part in txt.Split(','))
                 {
-                    try { set.Add((Dz)Enum.Parse(typeof(Dz), part.Trim(), true)); } catch (Exception) { }
+                    try
+                    {
+                        Dz d = (Dz)Enum.Parse(typeof(Dz), part.Trim(), true);
+                        if (Diseases.Get(d) != null) set.Add(d);
+                    }
+                    catch (Exception) { }
                 }
                 return set;
             }
@@ -405,10 +381,25 @@ namespace GeneticRoulette
             catch (Exception) { return false; }
         }
 
-        static string DName(Dz d) { return Ru() ? NameRu[(int)d] : NameEn[(int)d]; }
-        static string DDesc(Dz d) { return Ru() ? DescRu[(int)d] : DescEn[(int)d]; }
+        static string DName(Dz d) { DiseaseDef def = Diseases.Get(d); return def == null ? d.ToString() : def.Name(Ru()); }
+        static string DDesc(Dz d)
+        {
+            DiseaseDef def = Diseases.Get(d);
+            if (def == null) return "";
+            string text = def.Desc(Ru());
+            string perk = def.Perk(Ru());
+            if (!string.IsNullOrEmpty(perk)) text += "\n" + (Ru() ? "Плюс: " : "Perk: ") + perk;
+            return text;
+        }
         static string Healthy() { return Ru() ? "Здоров" : "Healthy"; }
         static string RollName(int v) { return v < 0 ? Healthy() : DName((Dz)v); }
+
+        /// <summary>Случайная строка для «барабана»: любая болезнь из реестра или «Здоров».</summary>
+        static string RandomReelText()
+        {
+            int i = UnityEngine.Random.Range(-1, Diseases.All.Count);
+            return i < 0 ? Healthy() : Diseases.All[i].Name(Ru());
+        }
 
         static string Describe(HashSet<Dz> set)
         {
@@ -429,18 +420,34 @@ namespace GeneticRoulette
         // =====================================================================
         bool stepLogged;
 
-        void HandleKey(KeyCode key)
+        void HandleKey(KeyCode key, bool ctrl, bool shift)
         {
             if (Time.realtimeSinceStartup - lastKeyTime < 0.25f) return;
-            lastKeyTime = Time.realtimeSinceStartup;
+
+            if (key == CfgDebugKey.Value)
+            {
+                // режим отладки — только по комбинации Ctrl+Shift+клавиша
+                if (!(ctrl && shift)) return;
+                lastKeyTime = Time.realtimeSinceStartup;
+                DebugMode = !DebugMode;
+                Log.LogInfo("Debug mode: " + DebugMode);
+                Toast(DebugMode
+                    ? "DEBUG MOD: ON (" + CfgRerollKey.Value + " = " + (Ru() ? "бросить заново" : "reroll") + ")"
+                    : "DEBUG MOD: OFF", 3f);
+                return;
+            }
+
             if (key == CfgListKey.Value)
             {
+                lastKeyTime = Time.realtimeSinceStartup;
                 showList = !showList;
                 Log.LogInfo("List toggled: " + showList);
             }
             else if (key == CfgRerollKey.Value)
             {
-                Log.LogInfo("Manual reroll");
+                if (!DebugMode) return;
+                lastKeyTime = Time.realtimeSinceStartup;
+                Log.LogInfo("Manual reroll (debug mode)");
                 ResetEffectState();
                 NewRoll();
             }
@@ -449,6 +456,8 @@ namespace GeneticRoulette
         internal void Step()
         {
             if (!stepLogged) { stepLogged = true; Log.LogInfo("Update loop is running"); }
+
+            RefreshPlayer();
 
             // новый мир (новая сцена) без вызова TryLoadGame-патча
             WorldGeneration cw = WorldGeneration.world;
@@ -465,8 +474,11 @@ namespace GeneticRoulette
             {
                 try
                 {
-                    if (Input.GetKeyDown(CfgListKey.Value)) HandleKey(CfgListKey.Value);
-                    if (Input.GetKeyDown(CfgRerollKey.Value)) HandleKey(CfgRerollKey.Value);
+                    bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
+                    bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+                    if (Input.GetKeyDown(CfgListKey.Value)) HandleKey(CfgListKey.Value, ctrl, shift);
+                    if (Input.GetKeyDown(CfgRerollKey.Value)) HandleKey(CfgRerollKey.Value, ctrl, shift);
+                    if (Input.GetKeyDown(CfgDebugKey.Value)) HandleKey(CfgDebugKey.Value, ctrl, shift);
                 }
                 catch (Exception) { legacyInputOk = false; Log.LogInfo("Legacy Input unavailable, using IMGUI key events"); }
             }
@@ -504,7 +516,7 @@ namespace GeneticRoulette
                         reelTimer -= Time.unscaledDeltaTime;
                         if (reelTimer <= 0f)
                         {
-                            reelText = RollName(UnityEngine.Random.Range(-1, 8));
+                            reelText = RandomReelText();
                             float p = local / SpinTime;
                             reelTimer = Mathf.Lerp(0.05f, 0.4f, p * p);
                         }
@@ -521,8 +533,8 @@ namespace GeneticRoulette
             Event e = Event.current;
             if (e != null && e.type == EventType.KeyDown)
             {
-                if (e.keyCode == CfgListKey.Value) HandleKey(CfgListKey.Value);
-                else if (e.keyCode == CfgRerollKey.Value) HandleKey(CfgRerollKey.Value);
+                if (e.keyCode == CfgListKey.Value || e.keyCode == CfgRerollKey.Value || e.keyCode == CfgDebugKey.Value)
+                    HandleKey(e.keyCode, e.control, e.shift);
             }
         }
 
@@ -560,16 +572,22 @@ namespace GeneticRoulette
             }
 
             ui.Update(rouletteActive, title, counter, reel, locked, spinProgress, desc,
-                listOn, head, body.ToString(), lines, toastOn, toastText);
+                listOn, head, body.ToString(), lines, toastOn, toastText, DebugMode);
         }
 
         // =====================================================================
-        // Зрение: URP Volume с ChannelMixer / ColorAdjustments
+        // Зрение: URP Volume, профиль собирают сами болезни (DiseaseDef.Vision)
         // =====================================================================
+        static bool NeedVision()
+        {
+            foreach (DiseaseDef d in Diseases.All)
+                if (d.Vision != null && Has(d.Id)) return true;
+            return false;
+        }
+
         void EnsureVision(bool rebuild)
         {
-            bool need = Has(Dz.Deuteranopia) || Has(Dz.Achromatopsia);
-
+            bool need = NeedVision();
             if (!need)
             {
                 if (visionGo != null) { Destroy(visionGo); visionGo = null; }
@@ -582,34 +600,13 @@ namespace GeneticRoulette
             {
                 visionGo = new GameObject("GeneticRoulette_Vision");
                 DontDestroyOnLoad(visionGo);
-
                 Volume vol = visionGo.AddComponent<Volume>();
                 vol.isGlobal = true;
                 vol.priority = 1000f;
                 vol.weight = 1f;
-
                 VolumeProfile prof = ScriptableObject.CreateInstance<VolumeProfile>();
-
-                if (Has(Dz.Deuteranopia))
-                {
-                    ChannelMixer cm = prof.Add<ChannelMixer>(true);
-                    // матрица Machado et al. 2009 (дейтеранопия), значения в процентах
-                    cm.redOutRedIn.Override(36.7f);
-                    cm.redOutGreenIn.Override(86.1f);
-                    cm.redOutBlueIn.Override(-22.8f);
-                    cm.greenOutRedIn.Override(28.0f);
-                    cm.greenOutGreenIn.Override(67.3f);
-                    cm.greenOutBlueIn.Override(4.7f);
-                    cm.blueOutRedIn.Override(-1.2f);
-                    cm.blueOutGreenIn.Override(4.3f);
-                    cm.blueOutBlueIn.Override(96.9f);
-                }
-                if (Has(Dz.Achromatopsia))
-                {
-                    ColorAdjustments ca = prof.Add<ColorAdjustments>(true);
-                    ca.saturation.Override(-100f);
-                }
-
+                foreach (DiseaseDef d in Diseases.All)
+                    if (d.Vision != null && Has(d.Id)) d.Vision(prof);
                 vol.sharedProfile = prof;
             }
             catch (Exception e)
@@ -625,111 +622,20 @@ namespace GeneticRoulette
         {
             if (Active.Count == 0 || pendingInit) return;
             if (!b.alive) return;
-            float dt = Time.deltaTime;
 
-            // --- глухота ---
-            if (Has(Dz.Deafness) && b.hearingLoss < CfgDeafFloor.Value)
-                b.hearingLoss = CfgDeafFloor.Value;
+            // как и сама игра в HandlePeriodicChecks: во время генерации мира и катсцен ничего не делаем
+            WorldGeneration w = WorldGeneration.world;
+            if (w != null && (w.generatingWorld || w.cutsceneActive)) return;
 
-            // --- астма ---
-            if (Has(Dz.Asthma))
-            {
-                if (asthmaLeft > 0f)
-                {
-                    asthmaLeft -= dt;
-                    float floor = CfgAsthmaFloor.Value;
-                    if (b.bloodOxygen > floor)
-                        b.bloodOxygen = Mathf.Max(floor, b.bloodOxygen - dt * 2.2f);
-                    b.stamina = Mathf.Max(0f, b.stamina - dt * 6f);
-                    if (asthmaLeft <= 0f)
-                        Toast(Ru() ? "Приступ астмы проходит." : "The asthma attack subsides.", 3f);
-                }
-                else
-                {
-                    asthmaTimer -= dt;
-                    if (asthmaTimer <= 0f && b.conscious && !b.sleeping)
-                    {
-                        asthmaLeft = UnityEngine.Random.Range(25f, 45f);
-                        asthmaTimer = UnityEngine.Random.Range(CfgAsthmaMin.Value, CfgAsthmaMax.Value);
-                        Toast(Ru() ? "Приступ астмы! Вам нечем дышать." : "Asthma attack! You can't breathe.", 4f);
-                    }
-                }
-            }
-
-            // --- нарколепсия ---
-            if (Has(Dz.Narcolepsy))
-            {
-                if (b.sleeping)
-                {
-                    if (narcTriggered && CfgNarcSleep.Value > 0f)
-                    {
-                        narcSleepTimer += dt;
-                        if (narcSleepTimer >= CfgNarcSleep.Value)
-                        {
-                            narcTriggered = false;
-                            try { b.WakeUp(); } catch (Exception e) { Log.LogWarning("WakeUp failed: " + e.Message); }
-                        }
-                    }
-                }
-                else if (b.conscious)
-                {
-                    narcTriggered = false;
-                    narcTimer -= dt;
-                    if (narcTimer <= 4f && !narcWarned)
-                    {
-                        narcWarned = true;
-                        Toast(Ru() ? "Вас неудержимо клонит в сон…" : "You feel an overwhelming urge to sleep…", 4f);
-                    }
-                    if (narcTimer <= 0f)
-                    {
-                        narcTimer = UnityEngine.Random.Range(CfgNarcMin.Value, CfgNarcMax.Value);
-                        narcWarned = false;
-                        TriggerNarcolepsy(b);
-                    }
-                }
-            }
+            foreach (DiseaseDef d in Diseases.All)
+                if (d.Tick != null && Has(d.Id)) d.Tick(b);
         }
 
-        static void TriggerNarcolepsy(Body b)
+        internal static void Periodic(Body b)
         {
-            try
-            {
-                if (MiDropItem != null)
-                {
-                    for (int i = 0; i < 3; i++)
-                    {
-                        try { MiDropItem.Invoke(b, new object[] { i }); } catch (Exception) { }
-                    }
-                }
-                if (MiNapAlt != null)
-                {
-                    IEnumerator routine = (IEnumerator)MiNapAlt.Invoke(b, null);
-                    b.StartCoroutine(routine);
-                    narcTriggered = true;
-                    narcSleepTimer = 0f;
-                }
-            }
-            catch (Exception e) { Log.LogError("Narcolepsy failed: " + e); }
-        }
-
-        // Гемофилия: вызывается после Body.HandlePeriodicChecks (там значения задаются заново)
-        internal static void ApplyHemophilia(Body b)
-        {
-            if (!Has(Dz.Hemophilia)) return;
-            try
-            {
-                if (MiBleedGet != null && MiBleedSet != null)
-                {
-                    float v = (float)MiBleedGet.Invoke(b, null);
-                    MiBleedSet.Invoke(b, new object[] { v * CfgHemoBleed.Value });
-                }
-                if (MiClotGet != null && MiClotSet != null)
-                {
-                    float c = (float)MiClotGet.Invoke(b, null);
-                    MiClotSet.Invoke(b, new object[] { c * CfgHemoClot.Value });
-                }
-            }
-            catch (Exception e) { Log.LogError("Hemophilia failed: " + e); }
+            if (Active.Count == 0 || pendingInit) return;
+            foreach (DiseaseDef d in Diseases.All)
+                if (d.Periodic != null && Has(d.Id)) d.Periodic(b);
         }
     }
 
@@ -757,7 +663,6 @@ namespace GeneticRoulette
     // =========================================================================
     // Harmony-патчи
     // =========================================================================
-
     [HarmonyPatch(typeof(SaveSystem), "TryLoadGame")]
     static class Patch_TryLoadGame
     {
@@ -783,34 +688,77 @@ namespace GeneticRoulette
     {
         static void Postfix(Body __instance)
         {
-            try { if (Plugin.IsPlayer(__instance)) Plugin.ApplyHemophilia(__instance); }
+            try { if (Plugin.IsPlayer(__instance)) Plugin.Periodic(__instance); }
             catch (Exception e) { Plugin.Log.LogError(e); }
         }
     }
 
-    // ВИЧ: множитель шанса заражения читается в Limb.Update, подменяем на время вызова
+    // ВИЧ: Limb.Update читает Body.infectionChanceMultiplier ровно в одном месте.
+    // Вместо подмены поля на время вызова заменяем само чтение на вызов Diseases.InfectionMultiplier(body).
     [HarmonyPatch(typeof(Limb), "Update")]
     static class Patch_LimbUpdate
     {
-        static void Prefix(Limb __instance, ref float __state)
+        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> code)
         {
-            __state = -1f;
-            try
+            MethodInfo replacement = AccessTools.Method(typeof(Diseases), "InfectionMultiplier", new Type[] { typeof(Body) });
+            int replaced = 0;
+            List<CodeInstruction> result = new List<CodeInstruction>();
+            foreach (CodeInstruction ci in code)
             {
-                if (!Plugin.Has(Dz.Hiv)) return;
-                Body b = __instance.body;
-                if (!Plugin.IsPlayer(b)) return;
-                __state = b.infectionChanceMultiplier;
-                b.infectionChanceMultiplier = __state * Plugin.CfgHivInfection.Value;
+                FieldInfo fi = ci.operand as FieldInfo;
+                if (ci.opcode == OpCodes.Ldfld && fi != null && fi.DeclaringType == typeof(Body) && fi.Name == "infectionChanceMultiplier")
+                {
+                    CodeInstruction repl = new CodeInstruction(OpCodes.Call, replacement);
+                    repl.labels.AddRange(ci.labels);
+                    repl.blocks.AddRange(ci.blocks);
+                    result.Add(repl);
+                    replaced++;
+                }
+                else result.Add(ci);
             }
-            catch (Exception e) { Plugin.Log.LogError(e); }
+            if (replaced == 0)
+                throw new InvalidOperationException("Limb.Update больше не читает Body.infectionChanceMultiplier (версия игры изменилась?)");
+            return result;
         }
+    }
 
-        static void Finalizer(Limb __instance, float __state)
+    // Плюс гемофилии: проверка «вязкость > 90 → лёгочная эмболия» в HandlePeriodicChecks
+    // читает вязкость через Diseases.EmbolismViscosity (подмена чтения поля, как у ВИЧ).
+    [HarmonyPatch(typeof(Body), "HandlePeriodicChecks")]
+    static class Patch_Embolism
+    {
+        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> code)
         {
-            if (__state < 0f) return;
-            try { __instance.body.infectionChanceMultiplier = __state; }
-            catch (Exception) { }
+            MethodInfo replacement = AccessTools.Method(typeof(Diseases), "EmbolismViscosity", new Type[] { typeof(Body) });
+            List<CodeInstruction> list = new List<CodeInstruction>(code);
+            int replaced = 0;
+            for (int i = 0; i < list.Count - 1; i++)
+            {
+                FieldInfo fi = list[i].operand as FieldInfo;
+                if (list[i].opcode == OpCodes.Ldfld && fi != null && fi.DeclaringType == typeof(Body) && fi.Name == "bloodViscosity"
+                    && list[i + 1].opcode == OpCodes.Ldc_R4 && list[i + 1].operand is float && (float)list[i + 1].operand == 90f)
+                {
+                    CodeInstruction repl = new CodeInstruction(OpCodes.Call, replacement);
+                    repl.labels.AddRange(list[i].labels);
+                    repl.blocks.AddRange(list[i].blocks);
+                    list[i] = repl;
+                    replaced++;
+                }
+            }
+            if (replaced != 1)
+                throw new InvalidOperationException("Проверка вязкости крови (>90) в HandlePeriodicChecks не найдена или найдена не одна (версия игры изменилась?): " + replaced);
+            return list;
+        }
+    }
+
+    // Плюс тугоухости: компенсируем часть штрафа настроения от постоянной потери слуха
+    [HarmonyPatch(typeof(Body), "totalHappiness", MethodType.Getter)]
+    static class Patch_TotalHappiness
+    {
+        static void Postfix(Body __instance, ref float __result)
+        {
+            try { __result += Diseases.DeafnessHappinessBonus(__instance); }
+            catch (Exception e) { Plugin.Log.LogError(e); }
         }
     }
 

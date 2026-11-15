@@ -23,9 +23,9 @@ namespace GeneticRoulette
         readonly Color lockedColor = new Color(1f, 0.85f, 0.3f, 1f);
         readonly Color bgColor = new Color(0.03f, 0.03f, 0.04f, 0.96f);
 
-        CanvasGroup cgBackdrop, cgRoulette, cgList, cgToast;
+        CanvasGroup cgBackdrop, cgRoulette, cgList, cgToast, cgDebug;
         RectTransform rouletteRt, progressFill, listRt, toastRt, reelRt;
-        TextMeshProUGUI tTitle, tCounter, tReel, tDesc, tListHead, tListBody, tToast;
+        TextMeshProUGUI tTitle, tCounter, tReel, tDesc, tListHead, tListBody, tToast, tDebug;
         readonly List<Image> accentImages = new List<Image>();
         readonly List<TextMeshProUGUI> allTexts = new List<TextMeshProUGUI>();
 
@@ -109,6 +109,7 @@ namespace GeneticRoulette
             if (!string.IsNullOrEmpty(hex) && ColorUtility.TryParseHtmlString(hex, out parsed))
                 accent = new Color(parsed.r, parsed.g, parsed.b, 1f);
             foreach (Image img in accentImages) if (img != null) img.color = accent;
+            if (tDebug != null) tDebug.color = accent;
         }
 
         void Build()
@@ -240,6 +241,20 @@ namespace GeneticRoulette
             AddImage(ti, bgColor, false);
             tToast = AddText(ti, "Text", 28f, TextAlignmentOptions.Center, textColor);
             Stretch(tToast.rectTransform, 12, 0, 12, 0);
+
+            // --- метка режима отладки (правый верхний угол) ---
+            RectTransform dbg = NewRect("DebugLabel", rootRt);
+            dbg.anchorMin = dbg.anchorMax = new Vector2(1f, 1f);
+            dbg.pivot = new Vector2(1f, 1f);
+            dbg.anchoredPosition = new Vector2(-24f, -20f);
+            dbg.sizeDelta = new Vector2(320f, 40f);
+            dbg.localScale = Vector3.one * uiScale;
+            cgDebug = AddGroup(dbg);
+            tDebug = AddText(dbg, "Text", 26f, TextAlignmentOptions.MidlineRight, accent);
+            Stretch(tDebug.rectTransform, 0, 0, 0, 0);
+            tDebug.fontStyle = FontStyles.Bold;
+            tDebug.enableWordWrapping = false;
+            tDebug.text = "DEBUG MOD";
         }
 
         static float Fade(float cur, float target, float dt)
@@ -251,12 +266,12 @@ namespace GeneticRoulette
         internal void Update(
             bool rouletteOn, string title, string counter, string reel, bool locked, float spinProgress, string desc,
             bool listOn, string listHead, string listBody, int listLines,
-            bool toastOn, string toast)
+            bool toastOn, string toast, bool debugOn)
         {
             float dt = Time.unscaledDeltaTime;
             if (root == null)
             {
-                if (!rouletteOn && !listOn && !toastOn) return;
+                if (!rouletteOn && !listOn && !toastOn && !debugOn) return;
                 Build();
             }
 
@@ -300,6 +315,9 @@ namespace GeneticRoulette
             // сообщение
             cgToast.alpha = Fade(cgToast.alpha, toastOn ? 1f : 0f, dt);
             if (toastOn && tToast.text != toast) tToast.text = toast;
+
+            // метка режима отладки
+            cgDebug.alpha = Fade(cgDebug.alpha, debugOn ? 1f : 0f, dt);
         }
     }
 }

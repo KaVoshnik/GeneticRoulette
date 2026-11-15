@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using HarmonyLib;
 
 namespace GeneticRoulette
@@ -13,11 +12,6 @@ namespace GeneticRoulette
     {
         static readonly HashSet<string> missingLogged = new HashSet<string>();
 
-        static string Num(float v)
-        {
-            return v.ToString("0.#", CultureInfo.InvariantCulture);
-        }
-
         static string Pick(MoodleManager mm, string[] candidates)
         {
             if (mm.icons == null) return null;
@@ -26,111 +20,29 @@ namespace GeneticRoulette
             return null;
         }
 
-        static void AddOne(MoodleManager mm, int bg, string name, string desc, bool flash, params string[] iconCandidates)
+        static void AddOne(MoodleManager mm, MoodleSpec s)
         {
-            string icon = Pick(mm, iconCandidates);
+            string icon = Pick(mm, s.Icons);
             if (icon == null)
             {
-                string key = string.Join("/", iconCandidates);
+                string key = string.Join("/", s.Icons);
                 if (missingLogged.Add(key)) Plugin.Log.LogWarning("No moodle icon found among: " + key);
                 return;
             }
-            mm.AddMoodle(bg, icon, name, desc, flash, false);
+            mm.AddMoodle(s.Bg, icon, s.Name, s.Desc, s.Flash, false);
         }
 
         internal static void Add(MoodleManager mm)
         {
             bool ru = Plugin.Ru();
-
-            if (Plugin.Has(Dz.Hiv))
+            foreach (DiseaseDef def in Diseases.All)
             {
-                AddOne(mm, 1,
-                    ru ? "ВИЧ" : "HIV",
-                    ru ? "Хроническая иммунная недостаточность. Шанс заражения ран ×" + Num(Plugin.CfgHivInfection.Value) + "."
-                       : "Chronic immunodeficiency. Wound infection chance x" + Num(Plugin.CfgHivInfection.Value) + ".",
-                    false, "lowimmunity", "highimmunity", "infected");
-            }
-
-            if (Plugin.Has(Dz.Hemophilia))
-            {
-                AddOne(mm, 1,
-                    ru ? "Гемофилия" : "Hemophilia",
-                    ru ? "Кровь плохо свёртывается: кровотечения сильнее и останавливаются дольше."
-                       : "Blood barely clots: bleeding is heavier and lasts longer.",
-                    false, "heavybleeding", "bleeding", "smallbleeding");
-            }
-
-            if (Plugin.Has(Dz.Asthma))
-            {
-                if (Plugin.AsthmaAttack)
-                {
-                    AddOne(mm, 2,
-                        ru ? "Приступ астмы" : "Asthma attack",
-                        ru ? "Не хватает воздуха: падают кислород и выносливость."
-                           : "You can't get enough air: oxygen and stamina drop.",
-                        true, "cantbreathe", "hypoventilation", "oxygen");
-                }
-                else
-                {
-                    AddOne(mm, 1,
-                        ru ? "Астма" : "Asthma",
-                        ru ? "Время от времени накатывают приступы удушья."
-                           : "Sudden attacks of suffocation come from time to time.",
-                        false, "hypoventilation", "cantbreathe", "oxygen");
-                }
-            }
-
-            if (Plugin.Has(Dz.Deafness))
-            {
-                AddOne(mm, 1,
-                    ru ? "Тугоухость" : "Hearing loss",
-                    ru ? "Постоянная потеря слуха." : "Permanent hearing loss.",
-                    false, "hearingloss");
-            }
-
-            if (Plugin.Has(Dz.Narcolepsy))
-            {
-                if (Plugin.NarcWarning)
-                {
-                    AddOne(mm, 2,
-                        ru ? "Клонит в сон" : "Drifting off",
-                        ru ? "Вы вот-вот отключитесь. Найдите безопасное место."
-                           : "You are about to pass out. Find a safe spot.",
-                        true, "tired", "asleep", "badsleep");
-                }
-                else
-                {
-                    AddOne(mm, 1,
-                        ru ? "Нарколепсия" : "Narcolepsy",
-                        ru ? "Внезапные приступы сна. Предметы из рук выпадают."
-                           : "Sudden sleep attacks. You drop what you hold.",
-                        false, "badsleep", "tired", "asleep");
-                }
-            }
-
-            if (Plugin.Has(Dz.FragileBones))
-            {
-                AddOne(mm, 1,
-                    ru ? "Хрупкие кости" : "Brittle bones",
-                    ru ? "Падения и удары ранят и ломают сильнее (×" + Num(Plugin.CfgBones.Value) + ")."
-                       : "Falls and impacts injure and break more (x" + Num(Plugin.CfgBones.Value) + ").",
-                    false, "brokenbone", "dislocation");
-            }
-
-            if (Plugin.Has(Dz.Deuteranopia))
-            {
-                AddOne(mm, 0,
-                    ru ? "Дальтонизм" : "Color blindness",
-                    ru ? "Красный и зелёный сливаются." : "Red and green blur together.",
-                    false, "rippedeyes", "rippedeye", "confused", "focused");
-            }
-
-            if (Plugin.Has(Dz.Achromatopsia))
-            {
-                AddOne(mm, 1,
-                    ru ? "Ахроматопсия" : "Achromatopsia",
-                    ru ? "Весь мир в оттенках серого." : "The whole world is grayscale.",
-                    false, "rippedeyes", "rippedeye", "confused", "focused");
+                if (def.Moodle == null || !Plugin.Has(def.Id)) continue;
+                MoodleSpec spec = def.Moodle(ru);
+                if (spec == null) continue;
+                string perk = def.Perk(ru);
+                if (!string.IsNullOrEmpty(perk)) spec.Desc += " " + (ru ? "Плюс: " : "Perk: ") + perk;
+                AddOne(mm, spec);
             }
         }
     }

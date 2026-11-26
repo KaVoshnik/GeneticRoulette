@@ -8,6 +8,7 @@ using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
+using TMPro;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
@@ -19,7 +20,7 @@ namespace GeneticRoulette
     {
         public const string PluginGuid = "geneticroulette.casualtiesunknown";
         public const string PluginName = "Genetic Disease Roulette";
-        public const string PluginVersion = "1.1.0";
+        public const string PluginVersion = "1.2.1";
 
         internal static Plugin Instance;
         internal static ManualLogSource Log;
@@ -37,6 +38,26 @@ namespace GeneticRoulette
         internal static ConfigEntry<string> CfgAccent;
         internal static ConfigEntry<float> CfgUiScale;
         internal static ConfigEntry<bool> CfgPerks;
+        internal static ConfigEntry<bool> CfgBanner;
+        internal static ConfigEntry<bool> CfgDeathStat;
+        internal static ConfigEntry<bool> CfgStarterKit;
+        internal static ConfigEntry<bool> CfgItemsInLoot;
+        internal static ConfigEntry<KeyCode> CfgGiveKey;
+        internal static ConfigEntry<float> CfgAnemiaCap;
+        internal static ConfigEntry<float> CfgSugarRise;
+        internal static ConfigEntry<float> CfgInsulinPower;
+        internal static ConfigEntry<float> CfgSugarPerFood;
+        internal static ConfigEntry<float> CfgSugarPerDrink;
+        internal static ConfigEntry<float> CfgInsulinSecPerMl;
+        internal static ConfigEntry<float> CfgInsulinImmediate;
+        internal static ConfigEntry<float> CfgEpiMin;
+        internal static ConfigEntry<float> CfgEpiMax;
+        internal static ConfigEntry<float> CfgPainCap;
+        internal static ConfigEntry<float> CfgPainBlindDamage;
+        internal static ConfigEntry<float> CfgArvSecPerMl;
+        internal static ConfigEntry<float> CfgArvMax;
+        internal static ConfigEntry<float> CfgInhalerSecPerMl;
+        internal static ConfigEntry<float> CfgInhalerMax;
         internal static ConfigEntry<float> CfgHivInfection;
         internal static ConfigEntry<float> CfgHemoBleed;
         internal static ConfigEntry<float> CfgHemoClot;
@@ -113,6 +134,26 @@ namespace GeneticRoulette
             CfgUiScale = Config.Bind("UI", "UiScale", 1.0f, "Масштаб окон мода (0.5-2.5)");
             CfgSkipTutorial = Config.Bind("Debug", "SkipInTutorial", false, "Не бросать рулетку, если в сцене есть TutorialHandler");
             CfgPerks = Config.Bind("General", "EnablePerks", true, "Небольшие плюсы у некоторых болезней (баланс). false = только штрафы, чистый хардкор");
+            CfgBanner = Config.Bind("General", "ShowHealthBanner", true, "Плашка с болезнью, описанием и плюсами сверху в меню здоровья (R)");
+            CfgDeathStat = Config.Bind("General", "ShowOnDeathScreen", true, "Дописывать болезнь к строке состояния на экране смерти");
+            CfgStarterKit = Config.Bind("Items", "StarterKit", true, "Выдавать в начале нового забега лекарство для болезни (ингалятор, инсулин, препарат от ВИЧ)");
+            CfgItemsInLoot = Config.Bind("Items", "SpawnInLoot", true, "Лекарства мода встречаются в мире как обычная добыча категории 'drug'");
+            CfgGiveKey = Config.Bind("Debug", "GiveItemsKey", KeyCode.F6, "Тест: выдать все лекарства мода. Работает только при включённом режиме отладки");
+            CfgAnemiaCap = Config.Bind("Tuning", "AnemiaBloodCap", 80f, "Анемия: объём крови не поднимается выше этого значения (100 = норма)");
+            CfgSugarRise = Config.Bind("Tuning", "SugarRisePerSecond", 0.04f, "Диабет: на сколько в секунду растёт сахар без инсулина");
+            CfgInsulinPower = Config.Bind("Tuning", "InsulinSugarDropPerSecond", 0.15f, "Диабет: на сколько в секунду падает сахар, пока действует инсулин");
+            CfgSugarPerFood = Config.Bind("Tuning", "SugarPerFoodUnit", 1.2f, "Диабет: прирост сахара за единицу сытости от еды");
+            CfgSugarPerDrink = Config.Bind("Tuning", "SugarPerSugaryDrinkMl", 0.12f, "Диабет: прирост сахара за мл сладкого напитка");
+            CfgInsulinSecPerMl = Config.Bind("Tuning", "InsulinSecondsPerMl", 5f, "Секунд действия инсулина на 1 мл");
+            CfgInsulinImmediate = Config.Bind("Tuning", "InsulinImmediateDropPerMl", 0.6f, "Мгновенное снижение сахара на 1 мл инсулина");
+            CfgEpiMin = Config.Bind("Tuning", "EpilepsyIntervalMin", 150f, "Мин. секунд между припадками");
+            CfgEpiMax = Config.Bind("Tuning", "EpilepsyIntervalMax", 330f, "Макс. секунд между припадками");
+            CfgPainCap = Config.Bind("Tuning", "PainInsensitivityPainCap", 6f, "Максимальная боль каждой конечности при нечувствительности к боли");
+            CfgPainBlindDamage = Config.Bind("Tuning", "PainInsensitivityImpactMultiplier", 1.25f, "Множитель силы ударов при нечувствительности к боли");
+            CfgArvSecPerMl = Config.Bind("Tuning", "AntiretroviralSecondsPerMl", 12f, "Секунд подавления ВИЧ на 1 мл препарата");
+            CfgArvMax = Config.Bind("Tuning", "AntiretroviralMaxSeconds", 900f, "Максимум накопленного подавления ВИЧ, секунд");
+            CfgInhalerSecPerMl = Config.Bind("Tuning", "InhalerSecondsPerMl", 12f, "Секунд защиты от астмы на 1 мл бронхолитика (доза ингалятора 10 мл)");
+            CfgInhalerMax = Config.Bind("Tuning", "InhalerMaxSeconds", 600f, "Максимум накопленной защиты от астмы, секунд");
             CfgHivInfection = Config.Bind("Tuning", "HivInfectionMultiplier", 3.0f, "Множитель шанса заражения ран");
             CfgHemoBleed = Config.Bind("Tuning", "HemophiliaBleedMultiplier", 1.8f, "Множитель скорости кровотечения");
             CfgHemoClot = Config.Bind("Tuning", "HemophiliaClotMultiplier", 0.4f, "Множитель скорости свёртывания (меньше = хуже)");
@@ -243,10 +284,10 @@ namespace GeneticRoulette
                 }
             }
 
-            NewRoll();
+            NewRoll(true);
         }
 
-        void NewRoll()
+        void NewRoll(bool giveKit)
         {
             rolls = DoRoll();
             Active = new HashSet<Dz>();
@@ -254,6 +295,7 @@ namespace GeneticRoulette
             SaveSidecar();
             EnsureVision(true);
             Log.LogInfo("New run diseases: " + Describe(Active));
+            if (giveKit) CustomItems.GiveStarterKit(PlayerBody);
 
             if (CfgShowRoulette.Value)
             {
@@ -365,6 +407,35 @@ namespace GeneticRoulette
             catch (Exception e) { Log.LogWarning("Could not read sidecar: " + e.Message); return null; }
         }
 
+        // ---------- экран смерти ----------
+        /// <summary>
+        /// Строка «состояния» на экране смерти (там, где пишут настроение): добавляем болезни через «; ».
+        /// Вызывается транспилером из PlayerCamera.EndSequence сразу после ToUpper настроения.
+        /// </summary>
+        public static string DeathState(string mood)
+        {
+            try
+            {
+                if (!CfgDeathStat.Value || Active.Count == 0) return mood;
+                bool ru = Ru();
+                TMP_Text t = null;
+                try { t = PlayerCamera.main.deathStats.GetChild(7).GetComponent<TMP_Text>(); } catch (Exception) { }
+                if (ru && t != null && t.font != null && !t.font.HasCharacter('Ж', true)) ru = false;   // шрифт без кириллицы
+                List<string> names = new List<string>();
+                foreach (DiseaseDef d in Diseases.All) if (Has(d.Id)) names.Add(d.Short(ru));
+                if (names.Count == 0) return mood;
+                return mood + "; " + string.Join(", ", names.ToArray()).ToUpper();
+            }
+            catch (Exception e) { Log.LogError("DeathState: " + e); return mood; }
+        }
+
+        /// <summary>Подходит ли шрифт для русского текста (иначе показываем английские названия).</summary>
+        internal static bool FontHasCyrillic(TMP_Text t)
+        {
+            try { return t != null && t.font != null && t.font.HasCharacter('Ж', true); }
+            catch (Exception) { return false; }
+        }
+
         // ---------- тексты ----------
         internal static bool Ru()
         {
@@ -443,14 +514,38 @@ namespace GeneticRoulette
                 showList = !showList;
                 Log.LogInfo("List toggled: " + showList);
             }
+            else if (key == CfgGiveKey.Value)
+            {
+                if (!DebugMode) return;
+                lastKeyTime = Time.realtimeSinceStartup;
+                GiveAllTestItems();
+            }
             else if (key == CfgRerollKey.Value)
             {
                 if (!DebugMode) return;
                 lastKeyTime = Time.realtimeSinceStartup;
                 Log.LogInfo("Manual reroll (debug mode)");
                 ResetEffectState();
-                NewRoll();
+                NewRoll(false);
             }
+        }
+
+        static void GiveAllTestItems()
+        {
+            try
+            {
+                Body b = PlayerBody;
+                if (b == null) return;
+                int n = 0;
+                foreach (CustomItemDef d in CustomItems.Items_)
+                {
+                    Vector2 pos = (Vector2)b.transform.position + new Vector2(0.6f * (n + 1), 0.8f);
+                    Utils.Create(d.Id, pos, 0f);
+                    n++;
+                }
+                Toast("DEBUG MOD: " + (Ru() ? "лекарства выданы" : "medicines spawned"), 3f);
+            }
+            catch (Exception e) { Log.LogError("GiveAllTestItems: " + e); }
         }
 
         internal void Step()
@@ -479,6 +574,7 @@ namespace GeneticRoulette
                     if (Input.GetKeyDown(CfgListKey.Value)) HandleKey(CfgListKey.Value, ctrl, shift);
                     if (Input.GetKeyDown(CfgRerollKey.Value)) HandleKey(CfgRerollKey.Value, ctrl, shift);
                     if (Input.GetKeyDown(CfgDebugKey.Value)) HandleKey(CfgDebugKey.Value, ctrl, shift);
+                    if (Input.GetKeyDown(CfgGiveKey.Value)) HandleKey(CfgGiveKey.Value, ctrl, shift);
                 }
                 catch (Exception) { legacyInputOk = false; Log.LogInfo("Legacy Input unavailable, using IMGUI key events"); }
             }
@@ -533,7 +629,7 @@ namespace GeneticRoulette
             Event e = Event.current;
             if (e != null && e.type == EventType.KeyDown)
             {
-                if (e.keyCode == CfgListKey.Value || e.keyCode == CfgRerollKey.Value || e.keyCode == CfgDebugKey.Value)
+                if (e.keyCode == CfgListKey.Value || e.keyCode == CfgRerollKey.Value || e.keyCode == CfgDebugKey.Value || e.keyCode == CfgGiveKey.Value)
                     HandleKey(e.keyCode, e.control, e.shift);
             }
         }
@@ -770,11 +866,63 @@ namespace GeneticRoulette
         {
             try
             {
-                if (!Plugin.Has(Dz.FragileBones)) return;
                 if (!Plugin.IsPlayer(__instance.body)) return;
-                __0 *= Plugin.CfgBones.Value;
+                if (Plugin.Has(Dz.FragileBones)) __0 *= Plugin.CfgBones.Value;
+                if (Plugin.Has(Dz.PainInsensitivity)) __0 *= Plugin.CfgPainBlindDamage.Value;
             }
             catch (Exception e) { Plugin.Log.LogError(e); }
+        }
+    }
+
+    // Диабет: еда поднимает сахар (Body.Eat(голод, вес, тип))
+    [HarmonyPatch(typeof(Body), "Eat", new Type[] { typeof(float), typeof(float), typeof(int) })]
+    static class Patch_BodyEat
+    {
+        static void Prefix(Body __instance, float __0)
+        {
+            try { Diseases.OnEat(__instance, __0); }
+            catch (Exception e) { Plugin.Log.LogError(e); }
+        }
+    }
+
+    // Экран смерти: после текста настроения дописываем болезни.
+    // Текст собирается в корутине PlayerCamera.EndSequence: ... ToUpper(); set_text(...)
+    [HarmonyPatch]
+    static class Patch_DeathState
+    {
+        static MethodBase TargetMethod()
+        {
+            foreach (Type t in typeof(PlayerCamera).GetNestedTypes(BindingFlags.NonPublic | BindingFlags.Public))
+            {
+                if (t.Name.StartsWith("<EndSequence>"))
+                {
+                    MethodInfo m = AccessTools.Method(t, "MoveNext");
+                    if (m != null) return m;
+                }
+            }
+            return null;
+        }
+
+        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> code)
+        {
+            MethodInfo hook = AccessTools.Method(typeof(Plugin), "DeathState", new Type[] { typeof(string) });
+            List<CodeInstruction> list = new List<CodeInstruction>(code);
+            int seen = -1;
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (list[i].opcode == OpCodes.Ldstr && list[i].operand as string == "moodrange") { seen = i; break; }
+            }
+            if (seen < 0) throw new InvalidOperationException("В PlayerCamera.EndSequence не найден текст настроения (версия игры изменилась?)");
+            for (int i = seen; i < list.Count; i++)
+            {
+                MethodInfo mi = list[i].operand as MethodInfo;
+                if (list[i].opcode == OpCodes.Callvirt && mi != null && mi.Name == "ToUpper" && mi.GetParameters().Length == 0)
+                {
+                    list.Insert(i + 1, new CodeInstruction(OpCodes.Call, hook));
+                    return list;
+                }
+            }
+            throw new InvalidOperationException("В PlayerCamera.EndSequence после настроения не найден ToUpper (версия игры изменилась?)");
         }
     }
 }

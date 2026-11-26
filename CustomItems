@@ -1,0 +1,617 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Reflection;
+using HarmonyLib;
+using UnityEngine;
+
+namespace GeneticRoulette
+{
+    /// <summary>Жидкость-лекарство, которую мод добавляет в Liquids.Registry.</summary>
+    internal sealed class CustomLiquidDef
+    {
+        public string Id;
+        public string TemplateLiquid;            // жидкость игры, с которой копируем поля
+        public string NameRu, NameEn, DescRu, DescEn;
+        public Color32 Color;
+        public float ValuePerLiter;
+        public float InjectionSickness;
+        public LiquidType.OnDrink OnDrink;
+        public LiquidType.OnHealthUse OnHealthUse;          // для инъекций; null = нет
+        public bool Injectable;
+    }
+
+    /// <summary>Предмет мода: копия префаба и ItemInfo существующего предмета.</summary>
+    internal sealed class CustomItemDef
+    {
+        public string Id;
+        public string Template;                  // id предмета игры (префаб и ItemInfo копируются отсюда)
+        public string SpriteFile;                // имя файла в папке Sprites; null = берём спрайт шаблона без изменений
+        public Color Tint = Color.white;         // оттенок, если своего спрайта нет
+        public string LiquidId;
+        public float Capacity, Contents, Weight;
+        public int Value;
+        public string NameRu, NameEn, DescRu, DescEn;
+        public bool OralUse;                     // true = ингалятор (применяется как таблетки)
+        public Dz StarterFor;                    // у какой болезни выдаётся стартовый набор
+    }
+
+    internal static class CustomItems
+    {
+        internal const string InhalerId = "gr_inhaler";
+        internal const string ArvId = "gr_antiretroviral";
+        internal const string InsulinId = "gr_insulin";
+
+        internal static readonly List<CustomLiquidDef> Liquids_ = new List<CustomLiquidDef>();
+        internal static readonly List<CustomItemDef> Items_ = new List<CustomItemDef>();
+
+        static readonly Dictionary<string, GameObject> prefabs = new Dictionary<string, GameObject>();
+        static readonly Dictionary<string, Sprite> sprites = new Dictionary<string, Sprite>();
+        static GameObject holder;
+        static bool sugarWrapped;
+        static bool inGetPrefab;
+
+        // сладкие жидкости игры: после их питья у диабетика растёт сахар
+        static readonly string[] SugaryLiquids =
+        {
+            "soda", "lemonade", "icetea", "orangejuice", "applejuice", "energydrink",
+            "sportsdrink", "chocolatemilk", "producejuice", "refinedjuice", "sap", "carbonatedwater"
+        };
+
+        static CustomItems() { Define(); }
+
+        // =====================================================================
+        // Определения
+        // =====================================================================
+        static void Define()
+        {
+            // Цвета подобраны так, чтобы быть непохожими на все 75 жидкостей игры (расчёт в Lab).
+            Liquids_.Add(new CustomLiquidDef
+            {
+                Id = "grbronchodilator",
+                TemplateLiquid = "painkillers",
+                NameRu = "Бронхолитик", NameEn = "Bronchodilator",
+                DescRu = "Аэрозольный препарат, расширяющий бронхи. Мгновенно прекращает приступ астмы и защищает от новых на какое-то время.",
+                DescEn = "Aerosol medicine that opens the airways. Stops an asthma attack at once and protects from new ones for a while.",
+                Color = new Color32(0, 255, 0, 255),
+                ValuePerLiter = 160f,
+                InjectionSickness = 0f,
+                OnDrink = (amount, body) =>
+                {
+                    if (!Plugin.IsPlayer(body)) return;
+                    Diseases.AsthmaProtect = Mathf.Min(Diseases.AsthmaProtect + amount * Plugin.CfgInhalerSecPerMl.Value, Plugin.CfgInhalerMax.Value);
+                    body.bloodOxygen = Mathf.Min(100f, body.bloodOxygen + amount * 0.5f);
+                }
+            });
+
+            Liquids_.Add(new CustomLiquidDef
+            {
+                Id = "grantiretroviral",
+                TemplateLiquid = "heroin",
+                NameRu = "Антиретровирусный препарат", NameEn = "Antiretroviral drug",
+                DescRu = "Подавляет вирус иммунодефицита. Пока действует, раны заражаются как у здорового человека. Нужны регулярные дозы.",
+                DescEn = "Suppresses the immunodeficiency virus. While active, wounds get infected like a healthy person's. Needs regular doses.",
+                Color = new Color32(255, 0, 150, 255),
+                ValuePerLiter = 700f,
+                InjectionSickness = 0.1f,
+                Injectable = true,
+                OnDrink = (amount, body) => { },
+                OnHealthUse = (amount, limb) =>
+                {
+                    Body b = limb != null ? limb.body : null;
+                    if (!Plugin.IsPlayer(b)) return;
+                    Diseases.ArvTime = Mathf.Min(Diseases.ArvTime + amount * Plugin.CfgArvSecPerMl.Value, Plugin.CfgArvMax.Value);
+                }
+            });
+
+            Liquids_.Add(new CustomLiquidDef
+            {
+                Id = "grinsulin",
+                TemplateLiquid = "heroin",
+                NameRu = "Инсулин", NameEn = "Insulin",
+                DescRu = "Снижает сахар в крови. Слишком большая доза вызывает опасную гипогликемию, не вводите больше, чем нужно.",
+                DescEn = "Lowers blood sugar. Too large a dose causes dangerous hypoglycemia, don't inject more than needed.",
+                Color = new Color32(30, 75, 180, 255),
+                ValuePerLiter = 500f,
+                InjectionSickness = 0f,
+                Injectable = true,
+                OnDrink = (amount, body) => { },
+                OnHealthUse = (amount, limb) =>
+                {
+                    Body b = limb != null ? limb.body : null;
+                    if (!Plugin.IsPlayer(b)) return;
+                    Diseases.InsulinTime += amount * Plugin.CfgInsulinSecPerMl.Value;
+                    Diseases.Sugar -= amount * Plugin.CfgInsulinImmediate.Value;
+                    // у здорового человека инсулин даёт «сахарный провал»: голод и слабость
+                    if (!Plugin.Has(Dz.Diabetes))
+                    {
+                        b.hunger -= amount * 0.4f;
+                        b.stamina = Mathf.Max(0f, b.stamina - amount * 0.5f);
+                    }
+                }
+            });
+
+            Items_.Add(new CustomItemDef
+            {
+                Id = InhalerId,
+                Template = "painkillers",
+                SpriteFile = "inhaler.png",
+                Tint = Color.white,
+                LiquidId = "grbronchodilator",
+                Capacity = 100f, Contents = 100f, Weight = 0.15f, Value = 20,
+                NameRu = "Ингалятор", NameEn = "Inhaler",
+                DescRu = "Карманный ингалятор с бронхолитиком на 100 мл, одна доза 10 мл. Прекращает приступ астмы.",
+                DescEn = "Pocket inhaler with 100 ml of bronchodilator, 10 ml per dose. Stops an asthma attack.",
+                OralUse = true,
+                StarterFor = Dz.Asthma
+            });
+
+            Items_.Add(new CustomItemDef
+            {
+                Id = ArvId,
+                Template = "heroin",
+                SpriteFile = null,          // спрайт шприца игры; цвет жидкости виден внутри и так
+                Tint = Color.white,
+                LiquidId = "grantiretroviral",
+                Capacity = 100f, Contents = 60f, Weight = 0.25f, Value = 45,
+                NameRu = "Шприц с антиретровирусным препаратом", NameEn = "Antiretroviral syringe",
+                DescRu = "Шприц на 100 мл, внутри 60 мл препарата. Подавляет ВИЧ на время, зависящее от дозы.",
+                DescEn = "A 100 ml syringe holding 60 ml of medicine. Suppresses HIV for a time that depends on the dose.",
+                StarterFor = Dz.Hiv
+            });
+
+            Items_.Add(new CustomItemDef
+            {
+                Id = InsulinId,
+                Template = "heroin",
+                SpriteFile = null,          // спрайт шприца игры; цвет жидкости виден внутри и так
+                Tint = Color.white,
+                LiquidId = "grinsulin",
+                Capacity = 100f, Contents = 50f, Weight = 0.25f, Value = 40,
+                NameRu = "Шприц с инсулином", NameEn = "Insulin syringe",
+                DescRu = "Шприц на 100 мл, внутри 50 мл инсулина. Следите за дозой: избыток опасен.",
+                DescEn = "A 100 ml syringe holding 50 ml of insulin. Watch the dose: an overdose is dangerous.",
+                StarterFor = Dz.Diabetes
+            });
+        }
+
+        internal static bool IsCustom(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return false;
+            foreach (CustomItemDef d in Items_) if (d.Id == id) return true;
+            return false;
+        }
+
+        static CustomItemDef Find(string id)
+        {
+            foreach (CustomItemDef d in Items_) if (d.Id == id) return d;
+            return null;
+        }
+
+        // =====================================================================
+        // Регистрация (вызывается после Item.SetupItems; SetupItems пересоздаёт GlobalItems при каждой загрузке мира)
+        // =====================================================================
+        internal static void Register()
+        {
+            try
+            {
+                if (Item.GlobalItems == null) return;
+                RegisterLiquids();
+                WrapSugaryLiquids();
+                RegisterItems();
+                InjectLocale();
+                if (Plugin.CfgItemsInLoot.Value) RebuildLootPool();
+            }
+            catch (Exception e)
+            {
+                Plugin.Problem("Не удалось зарегистрировать лекарства: " + e.Message);
+                Plugin.Log.LogError(e);
+            }
+        }
+
+        static void CopyFields(object from, object to)
+        {
+            if (from == null || to == null) return;
+            Type t = from.GetType();
+            while (t != null && t != typeof(object))
+            {
+                foreach (FieldInfo f in t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+                {
+                    if (f.IsStatic || f.IsInitOnly) continue;
+                    if (!f.DeclaringType.IsAssignableFrom(to.GetType())) continue;
+                    try { f.SetValue(to, f.GetValue(from)); } catch (Exception) { }
+                }
+                t = t.BaseType;
+            }
+        }
+
+        static void RegisterLiquids()
+        {
+            if (Liquids.Registry == null) return;
+            foreach (CustomLiquidDef d in Liquids_)
+            {
+                if (Liquids.Registry.ContainsKey(d.Id)) continue;
+                LiquidType lt = new LiquidType();
+                LiquidType tpl;
+                if (Liquids.Registry.TryGetValue(d.TemplateLiquid, out tpl)) CopyFields(tpl, lt);
+
+                lt.localeName = d.Id;
+                lt.color = d.Color;
+                lt.valuePerLiter = d.ValuePerLiter;
+                lt.injectionSickness = d.InjectionSickness;
+                lt.injectable = d.Injectable;
+                lt.onDrink = d.OnDrink;
+                lt.onHealthUse = d.OnHealthUse;
+
+                // у шаблона могли быть «качества» для крафта; свои не нужны
+                FieldInfo q = typeof(LiquidType).GetField("qualities");
+                if (q != null) { try { q.SetValue(lt, Activator.CreateInstance(q.FieldType)); } catch (Exception) { } }
+
+                Liquids.Registry[d.Id] = lt;
+            }
+        }
+
+        static void WrapSugaryLiquids()
+        {
+            if (sugarWrapped || Liquids.Registry == null) return;
+            sugarWrapped = true;
+            foreach (string id in SugaryLiquids)
+            {
+                LiquidType lt;
+                if (!Liquids.Registry.TryGetValue(id, out lt) || lt == null) continue;
+                LiquidType.OnDrink orig = lt.onDrink;
+                lt.onDrink = (amount, body) =>
+                {
+                    if (orig != null) orig(amount, body);
+                    Diseases.OnSugaryDrink(body, amount);
+                };
+            }
+        }
+
+        static void RegisterItems()
+        {
+            foreach (CustomItemDef d in Items_)
+            {
+                ItemInfo tpl;
+                if (!Item.GlobalItems.TryGetValue(d.Template, out tpl) || tpl == null)
+                {
+                    Plugin.Problem("Нет шаблона предмета '" + d.Template + "' для " + d.Id);
+                    continue;
+                }
+
+                LiquidItemInfo li = new LiquidItemInfo();
+                CopyFields(tpl, li);
+
+                bool ru = Plugin.Ru();
+                li.fullName = ru ? d.NameRu : d.NameEn;
+                li.description = ru ? d.DescRu : d.DescEn;
+                li.capacity = d.Capacity;
+                li.weight = d.Weight;
+                li.value = d.Value;
+                li.autoFill = false;
+                li.defaultContents = new List<LiquidStack> { new LiquidStack(d.LiquidId, d.Contents) };
+                li.rec = new Recognition(1);
+
+                if (d.OralUse)
+                {
+                    // как таблетки: за одно применение выпивается 10 мл
+                    li.useAction = (body, item) =>
+                    {
+                        WaterContainerItem w = item != null ? item.GetComponent<WaterContainerItem>() : null;
+                        if (w != null) w.Drink(body, 10f, "spray");
+                    };
+                }
+
+                Item.GlobalItems[d.Id] = li;
+            }
+        }
+
+        static void RebuildLootPool()
+        {
+            try
+            {
+                MethodInfo mi = AccessTools.Method(typeof(ItemLootPool), "InitializePool");
+                if (mi != null) mi.Invoke(null, null);
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Не удалось обновить пул добычи: " + e.Message); }
+        }
+
+        // =====================================================================
+        // Локализация
+        // =====================================================================
+        internal static void InjectLocale()
+        {
+            try
+            {
+                Language lang = Locale.currentLang;
+                if (lang == null) return;
+                bool ru = Plugin.Ru();
+                foreach (CustomLiquidDef d in Liquids_)
+                {
+                    SetStr(lang.other, d.Id, ru ? d.NameRu : d.NameEn);
+                    SetStr(lang.other, d.Id + "dsc", ru ? d.DescRu : d.DescEn);
+                }
+                foreach (CustomItemDef d in Items_)
+                {
+                    SetStr(lang.main, d.Id, ru ? d.NameRu : d.NameEn);
+                    SetStr(lang.main, d.Id + "dsc", ru ? d.DescRu : d.DescEn);
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Locale inject failed: " + e.Message); }
+        }
+
+        static void SetStr(Dictionary<string, string> dict, string key, string value)
+        {
+            if (dict != null) dict[key] = value;
+        }
+
+        // =====================================================================
+        // Префабы и спрайты
+        // =====================================================================
+        // Встроенные заготовки спрайтов (PNG в base64). Используются, если файл в папке Sprites не найден,
+        // поэтому ингалятор всегда выглядит как задумано, даже при неправильной установке.
+        static readonly Dictionary<string, string> EmbeddedSprites = new Dictionary<string, string>
+        {
+            { InhalerId, "iVBORw0KGgoAAAANSUhEUgAAAAcAAAAJCAYAAAD+WDajAAAAa0lEQVR4nGNkYGBgOHLqyn8GBgaGS1duMGQlhTAyQAETAx7AyMDAwPBhmsZ/mIBA1g3idLIwMDAwXDFZwwCzk4EhBGFsxYYP/9F1dAQIMDIwMDCwnLjwBL+x6EAtZN5/BgYGBpZnV07h1AkAVEwatVywWb4AAAAASUVORK5CYII=" }
+        };
+
+        static bool spriteSearchLogged;
+
+        /// <summary>Ищет PNG: рядом с DLL, в Sprites рядом с DLL, в plugins/GeneticRoulette/Sprites и рекурсивно по plugins (без учёта регистра).</summary>
+        static string FindSpriteFile(string fileName)
+        {
+            List<string> tried = new List<string>();
+            try
+            {
+                string loc = Plugin.Instance != null ? Plugin.Instance.Info.Location : null;
+                string dllDir = string.IsNullOrEmpty(loc) ? null : Path.GetDirectoryName(loc);
+                string pluginsDir = BepInEx.Paths.PluginPath;
+
+                List<string> cand = new List<string>();
+                if (dllDir != null)
+                {
+                    cand.Add(Path.Combine(Path.Combine(dllDir, "Sprites"), fileName));
+                    cand.Add(Path.Combine(dllDir, fileName));
+                }
+                cand.Add(Path.Combine(Path.Combine(Path.Combine(pluginsDir, "GeneticRoulette"), "Sprites"), fileName));
+                cand.Add(Path.Combine(Path.Combine(pluginsDir, "Sprites"), fileName));
+                cand.Add(Path.Combine(pluginsDir, fileName));
+
+                foreach (string p in cand)
+                {
+                    tried.Add(p);
+                    if (File.Exists(p)) return p;
+                }
+
+                // последний шанс: любая папка внутри plugins, регистр не важен
+                if (Directory.Exists(pluginsDir))
+                {
+                    foreach (string f in Directory.GetFiles(pluginsDir, "*.png", SearchOption.AllDirectories))
+                        if (string.Equals(Path.GetFileName(f), fileName, StringComparison.OrdinalIgnoreCase)) return f;
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Поиск спрайта " + fileName + ": " + e.Message); }
+
+            if (!spriteSearchLogged)
+            {
+                spriteSearchLogged = true;
+                Plugin.Log.LogWarning("Файл спрайта '" + fileName + "' не найден. Искал: " + string.Join(" | ", tried.ToArray())
+                    + ". Положите его, например, сюда: " + (tried.Count > 0 ? tried[0] : "BepInEx/plugins/GeneticRoulette/Sprites/" + fileName));
+            }
+            return null;
+        }
+
+        static Sprite MakeSprite(byte[] png, string id)
+        {
+            Texture2D tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            if (!ImageConversion.LoadImage(tex, png)) return null;
+            tex.filterMode = FilterMode.Point;
+            tex.wrapMode = TextureWrapMode.Clamp;
+            tex.name = id;
+            // в игре 8 пикселей на единицу, центр спрайта в середине
+            Sprite sp = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 8f);
+            sp.name = id;
+            return sp;
+        }
+
+        static Sprite LoadSprite(CustomItemDef d)
+        {
+            Sprite sp;
+            if (string.IsNullOrEmpty(d.SpriteFile)) return null;      // своего спрайта у предмета нет
+            if (sprites.TryGetValue(d.Id, out sp) && sp != null) return sp;
+
+            // 1) файл пользователя
+            try
+            {
+                string path = FindSpriteFile(d.SpriteFile);
+                if (path != null)
+                {
+                    sp = MakeSprite(File.ReadAllBytes(path), d.Id);
+                    if (sp != null)
+                    {
+                        Plugin.Log.LogInfo("Спрайт " + d.Id + ": файл " + path + " (" + sp.texture.width + "x" + sp.texture.height + ")");
+                        sprites[d.Id] = sp;
+                        return sp;
+                    }
+                    Plugin.Log.LogWarning("Не удалось прочитать PNG " + path + ", использую встроенный спрайт");
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Спрайт " + d.SpriteFile + ": " + e.Message); }
+
+            // 2) встроенная заготовка
+            try
+            {
+                string b64;
+                if (EmbeddedSprites.TryGetValue(d.Id, out b64))
+                {
+                    sp = MakeSprite(Convert.FromBase64String(b64), d.Id);
+                    if (sp != null)
+                    {
+                        Plugin.Log.LogInfo("Спрайт " + d.Id + ": встроенная заготовка (файл " + d.SpriteFile + " не найден)");
+                        sprites[d.Id] = sp;
+                        return sp;
+                    }
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Встроенный спрайт " + d.Id + ": " + e.Message); }
+            return null;
+        }
+
+        /// <summary>Возвращает префаб предмета мода (создаёт копию префаба-шаблона при первом запросе).</summary>
+        internal static GameObject GetPrefab(string id)
+        {
+            GameObject p;
+            if (prefabs.TryGetValue(id, out p) && p != null) return p;
+            CustomItemDef d = Find(id);
+            if (d == null || inGetPrefab) return null;
+
+            inGetPrefab = true;
+            try
+            {
+                GameObject tpl = Resources.Load(d.Template) as GameObject;
+                if (tpl == null) { Plugin.Problem("Нет префаба-шаблона '" + d.Template + "' для " + id); return null; }
+
+                if (holder == null)
+                {
+                    holder = new GameObject("GeneticRoulette_Prefabs");
+                    holder.SetActive(false);                       // всё внутри не просыпается (Awake не вызывается)
+                    holder.hideFlags = HideFlags.HideAndDontSave;
+                    UnityEngine.Object.DontDestroyOnLoad(holder);
+                }
+
+                GameObject clone = UnityEngine.Object.Instantiate(tpl, holder.transform);
+                clone.name = id;
+
+                Item it = clone.GetComponent<Item>();
+                FieldInfo idField = typeof(Item).GetField("id", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (it == null || idField == null)
+                {
+                    Plugin.Problem("У префаба '" + d.Template + "' нет Item.id: предмет " + id + " не создан");
+                    UnityEngine.Object.Destroy(clone);
+                    return null;
+                }
+                idField.SetValue(it, id);
+
+                SpriteRenderer sr = clone.GetComponent<SpriteRenderer>();
+                Sprite custom = LoadSprite(d);
+                if (sr != null)
+                {
+                    if (custom != null)
+                    {
+                        sr.sprite = custom;
+                        BoxCollider2D bc = clone.GetComponent<BoxCollider2D>();
+                        if (bc != null) bc.size = custom.bounds.size;
+                        CircleCollider2D cc = clone.GetComponent<CircleCollider2D>();
+                        if (cc != null) cc.radius = Mathf.Max(custom.bounds.size.x, custom.bounds.size.y) * 0.5f;
+                    }
+                    else if (d.Tint != Color.white)
+                    {
+                        sr.color = d.Tint;      // запасной вариант: спрайт шаблона, подкрашенный
+                    }
+                }
+
+                prefabs[id] = clone;
+                return clone;
+            }
+            catch (Exception e)
+            {
+                Plugin.Problem("Не удалось создать префаб " + id + ": " + e.Message);
+                Plugin.Log.LogError(e);
+                return null;
+            }
+            finally { inGetPrefab = false; }
+        }
+
+        // =====================================================================
+        // Стартовый набор
+        // =====================================================================
+        internal static void GiveStarterKit(Body b)
+        {
+            if (!Plugin.CfgStarterKit.Value || b == null) return;
+            try
+            {
+                int n = 0;
+                foreach (CustomItemDef d in Items_)
+                {
+                    if (!Plugin.Has(d.StarterFor)) continue;
+                    Vector2 pos = (Vector2)b.transform.position + new Vector2(0.6f * (n + 1), 0.8f);
+                    GameObject go = Utils.Create(d.Id, pos, 0f);
+                    if (go == null) Plugin.Log.LogWarning("Стартовый набор: не удалось создать " + d.Id);
+                    n++;
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Стартовый набор: " + e.Message); }
+        }
+    }
+
+    // =========================================================================
+    // Harmony-патчи
+    // =========================================================================
+    [HarmonyPatch(typeof(Item), "SetupItems")]
+    static class Patch_SetupItems
+    {
+        static void Postfix() { CustomItems.Register(); }
+    }
+
+    [HarmonyPatch(typeof(Locale), "LoadLanguage")]
+    static class Patch_LoadLanguage
+    {
+        static void Postfix() { CustomItems.InjectLocale(); }
+    }
+
+    // Все загрузки предметов из Resources по id идут через этот метод.
+    [HarmonyPatch(typeof(Resources), "Load", new Type[] { typeof(string), typeof(Type) })]
+    static class Patch_ResourcesLoadTyped
+    {
+        static bool Prefix(string path, Type systemTypeInstance, ref UnityEngine.Object __result)
+        {
+            if (!CustomItems.IsCustom(path)) return true;
+            GameObject p = CustomItems.GetPrefab(path);
+            if (p == null) return true;
+            if (systemTypeInstance != null && !systemTypeInstance.IsAssignableFrom(typeof(GameObject))) return true;
+            __result = p;
+            return false;
+        }
+    }
+
+    [HarmonyPatch(typeof(Resources), "Load", new Type[] { typeof(string) })]
+    static class Patch_ResourcesLoad
+    {
+        static bool Prefix(string path, ref UnityEngine.Object __result)
+        {
+            if (!CustomItems.IsCustom(path)) return true;
+            GameObject p = CustomItems.GetPrefab(path);
+            if (p == null) return true;
+            __result = p;
+            return false;
+        }
+    }
+
+    // Запасной слой: Utils.Create (так игра создаёт предметы по id). На случай, если Resources.Load
+    // будет «вшит» JIT-компилятором в вызывающий код и патч выше не сработает.
+    [HarmonyPatch(typeof(Utils), "Create", new Type[] { typeof(string), typeof(Vector2), typeof(float) })]
+    static class Patch_UtilsCreatePos
+    {
+        static bool Prefix(string __0, Vector2 __1, float __2, ref GameObject __result)
+        {
+            if (!CustomItems.IsCustom(__0)) return true;
+            GameObject p = CustomItems.GetPrefab(__0);
+            if (p == null) return true;
+            __result = UnityEngine.Object.Instantiate(p, new Vector3(__1.x, __1.y, 0f), Quaternion.Euler(0f, 0f, __2));
+            return false;
+        }
+    }
+
+    [HarmonyPatch(typeof(Utils), "Create", new Type[] { typeof(string), typeof(Transform) })]
+    static class Patch_UtilsCreateParent
+    {
+        static bool Prefix(string __0, Transform __1, ref GameObject __result)
+        {
+            if (!CustomItems.IsCustom(__0)) return true;
+            GameObject p = CustomItems.GetPrefab(__0);
+            if (p == null) return true;
+            __result = UnityEngine.Object.Instantiate(p, __1);
+            return false;
+        }
+    }
+}
